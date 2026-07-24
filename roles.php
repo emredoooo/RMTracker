@@ -33,6 +33,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+// Proses Edit
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] == 'edit') {
+    $id = $_POST['id'];
+    $nik = $_POST['nik'];
+    $nama = $_POST['nama'];
+    $role = $_POST['role'];
+    $unit = $_POST['unit'];
+    
+    try {
+        if (!empty($_POST['password'])) {
+            $pass = password_hash($_POST['password'], PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET nik=?, password=?, nama=?, role=?, unit_asal=? WHERE id=?");
+            $stmt->execute([$nik, $pass, $nama, $role, $unit, $id]);
+        } else {
+            $stmt = $pdo->prepare("UPDATE users SET nik=?, nama=?, role=?, unit_asal=? WHERE id=?");
+            $stmt->execute([$nik, $nama, $role, $unit, $id]);
+        }
+        $success = "Berhasil mengubah data pengguna.";
+    } catch(PDOException $e) {
+        $error = "Gagal mengubah data. Pastikan NIK unik.";
+    }
+}
+
 $users = $pdo->query("SELECT * FROM users ORDER BY created_at DESC")->fetchAll();
 include 'includes/header.php'; 
 ?>
@@ -44,6 +67,9 @@ include 'includes/header.php';
 
 <?php if(isset($error)): ?>
     <div class="alert alert-danger"><?php echo $error; ?></div>
+<?php endif; ?>
+<?php if(isset($success)): ?>
+    <div class="alert alert-success"><?php echo $success; ?></div>
 <?php endif; ?>
 
 <!-- Daftar User -->
@@ -61,8 +87,55 @@ include 'includes/header.php';
                 <?php echo htmlspecialchars(ucfirst(str_replace('_', ' ', $u['role']))); ?>
             </span>
             <br>
+            <a href="#" class="text-primary small text-decoration-none me-2" data-bs-toggle="modal" data-bs-target="#editUserModal<?php echo $u['id']; ?>">Edit</a>
             <a href="roles.php?delete=<?php echo $u['id']; ?>" class="text-danger small text-decoration-none" onclick="return confirm('Hapus pengguna ini?');">Hapus</a>
         </div>
+    </div>
+
+    <!-- Modal Edit User -->
+    <div class="modal fade" id="editUserModal<?php echo $u['id']; ?>" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Edit Pengguna</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <form method="POST" action="roles.php">
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="id" value="<?php echo $u['id']; ?>">
+            <div class="modal-body text-start">
+                <div class="mb-3">
+                    <label>NIK / Username</label>
+                    <input type="text" name="nik" class="form-control" value="<?php echo htmlspecialchars($u['nik']); ?>" required>
+                </div>
+                <div class="mb-3">
+                    <label>Nama Lengkap</label>
+                    <input type="text" name="nama" class="form-control" value="<?php echo htmlspecialchars($u['nama']); ?>" required>
+                </div>
+                <div class="mb-3">
+                    <label>Password Baru (Kosongkan jika tidak diubah)</label>
+                    <input type="password" name="password" class="form-control">
+                </div>
+                <div class="mb-3">
+                    <label>Role</label>
+                    <select name="role" class="form-select" required>
+                        <option value="perawat" <?php echo $u['role'] == 'perawat' ? 'selected' : ''; ?>>Perawat</option>
+                        <option value="petugas_rm" <?php echo $u['role'] == 'petugas_rm' ? 'selected' : ''; ?>>Petugas RM</option>
+                        <option value="superadmin" <?php echo $u['role'] == 'superadmin' ? 'selected' : ''; ?>>Superadmin</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label>Unit / Ruangan</label>
+                    <input type="text" name="unit" class="form-control" value="<?php echo htmlspecialchars($u['unit_asal']); ?>" required>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
     <?php endforeach; ?>
 </div>
