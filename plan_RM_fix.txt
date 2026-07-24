@@ -1,0 +1,142 @@
+================================================================================
+            SPESIFIKASI FINAL & RENCANA IMPLEMENTASI (plan_RM_fix.txt)
+                     SISTEM TRACKING REKAM MEDIS (RM)
+================================================================================
+
+[1. RINGKASAN PROYEK & KESEPAKATAN UTAMA]
+--------------------------------------------------------------------------------
+Nama Proyek         : SIMRS RM Tracker (Ekstensi Standalone)
+Target Aplikasi     : Pelacakan Berkas Fisik Rekam Medis Pasien
+Arsitektur Sistem   : Web Application Standalone (Server Terpisah dari SIMRS Utama)
+Model Pengenalan    : QR Code Fisik pada Berkas RM (Format Payload: Pure No. RM "00123456")
+Prinsip Operasional : Chain of Custody (Rantai Penguasaan) & Scan On-Demand
+Strategi Database   : Dual Database Connection (Read-Only ke SIMRS Khanza, Read/Write ke DB Lokal)
+
+[2. ATURAN EMAS & ALUR KERJA (WORKFLOW) LAPANGAN]
+--------------------------------------------------------------------------------
+Aturan Utama: "Pihak yang MENERIMA fisik berkas adalah pihak yang WAJIB melakukan SCAN"
+
+Alur Transaksi:
+1. Peminjaman / Check-Out (Divisi RM -> Peminjam / Si A IGD):
+   - Si A (IGD) mendatangi divisi RM untuk mengambil berkas.
+   - Jika berkas belum ada QR Code, Petugas RM mencetak label QR Code (Format: 00123456)
+     secara On-Demand dan menempelkannya di sampul depan berkas.
+   - Si A login ke Web Tracking via HP/Tablet/PC, memilih menu "Pinjam Berkas", 
+     dan melakukan SCAN QR Code pada berkas tersebut.
+   - Status Sistem: DIPINJAM | Penanggung Jawab: Si A (IGD).
+
+2. Oper Alih / Transfer Antar-Ruangan (Si A IGD -> Si X Ranap Hawa):
+   - Pasien pindah ruangan bersama berkas fisik RM.
+   - Si X (Ranap Hawa) login ke Web Tracking, memilih menu "Terima/Transfer Berkas", 
+     dan melakukan SCAN QR Code pada berkas yang dibawa.
+   - Status Sistem: DIPINJAM | Penanggung Jawab Berpindah: Si X (Ranap Hawa).
+
+3. Pengembalian / Check-In (Si X Ranap Hawa -> Divisi RM):
+   - Berkas fisik dikembalikan ke divisi RM.
+   - Petugas RM mengecek kondisi fisik berkas, login ke Web Tracking, lalu SCAN QR Code.
+   - Status Sistem: TERSEDIA | Penanggung Jawab: Divisi RM.
+   - Catatan Khusus: Jika berkas dikembalikan langsung oleh Si X tanpa record transfer 
+     dari Si A, sistem tetap menerima Check-In tetapi mencatat penanda "Direct Return 
+     from Unrecorded Transfer" di Log Audit.
+
+[3. ARSITEKTUR TEKNIS & INTEGRASI DATABASE]
+--------------------------------------------------------------------------------
+Diagram Arsitektur:
+
+  +-----------------------+              +----------------------------------+
+  | Perangkat Klien       |              | Server Aplikasi Tracking Lokal   |
+  | (PC / HP / Tablet)    | <=========>  | (Node.js / Laravel / FastAPI)    |
+  +-----------------------+   Web HTTPS  +----------------------------------+
+                                           |                      |
+                               (Read-Only) |                      | (Read/Write)
+                                           v                      v
+                             +--------------------+     +-------------------+
+                             | SIMRS Khanza DB    |     | DB Tracking Lokal |
+                             | (MySQL/MariaDB)    |     | (MySQL/PostgreSQL)|
+                             +--------------------+     +-------------------+
+
+Integrasi SIMRS Khanza (Read-Only):
+- Hanya membaca tabel otentikasi (`petugas`) dan master pasien (`pasien`).
+- Dibuatkan user khusus di database Khanza dengan otorisasi terbatas:
+  GRANT SELECT ON khanza_db.petugas TO 'user_read_tracking'@'IP_SERVER_TRACKING' IDENTIFIED BY 'PasswordAman123!';
+  GRANT SELECT ON khanza_db.pasien TO 'user_read_tracking'@'IP_SERVER_TRACKING' IDENTIFIED BY 'PasswordAman123!';
+  FLUSH PRIVILEGES;
+
+[4. RANCANGAN DATABASE LOKAL (DB TRACKING)]
+--------------------------------------------------------------------------------
+1. Tabel: `rm_current_status` (Menyimpan status terkini berkas)
+   - `no_rkm_medis`       : VARCHAR(15) PRIMARY KEY (misal: "00123456")
+   - `current_status`     : ENUM('TERSEDIA', 'DIPINJAM', 'HILANG') DEFAULT 'TERSEDIA'
+   - `current_holder_id`  : VARCHAR(20) NULL (ID/NIK Petugas penanggung jawab saat ini)
+   - `current_holder_name`: VARCHAR(100) NULL (Nama Petugas penanggung jawab)
+   - `current_unit`       : VARCHAR(50) DEFAULT 'RM' (Lokasi fisik berkas saat ini)
+   - `borrowed_at`        : DATETIME NULL (Waktu mulai dipinjam)
+   - `due_date`           : DATETIME NULL (Batas waktu wajib kembali untuk pemicu Alert)
+   - `updated_at`         : DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+2. Tabel: `rm_tracking_logs` (Pencatatan riwayat audit yang tidak bisa diubah/immutable)
+   - `id`                 : BIGINT PRIMARY KEY AUTO_INCREMENT
+   - `no_rkm_medis`       : VARCHAR(15) INDEX
+   - `action_type`        : ENUM('CHECK_OUT', 'TRANSFER', 'CHECK_IN', 'MARK_LOST')
+   - `from_unit`          : VARCHAR(50) (Unit asal)
+   - `to_unit`            : VARCHAR(50) (Unit tujuan)
+   - `actor_id`           : VARCHAR(20) (NIK/ID Petugas yang melakukan scan/aksi)
+   - `actor_name`         : VARCHAR(100) (Nama Petugas yang melakukan scan)
+   - `is_direct_return`   : TINYINT(1) DEFAULT 0 (Penanda jika pengembalian tanpa alur transfer)
+   - `notes`              : TEXT NULL (Catatan kondisi berkas fisik, misal: "Lembar sobek")
+   - `created_at`         : DATETIME DEFAULT CURRENT_TIMESTAMP INDEX
+
+[5. TEKNOLOGI & SPESIFIKASI SPESIFIK]
+--------------------------------------------------------------------------------
+- Frontend            : HTML5, CSS Framework (TailwindCSS / Bootstrap), JavaScript Native.
+- QR Code Scanner Lib : `html5-qrcode` / `zxing-js` (Mendukung kamera HP/Tablet & USB Scanner).
+- Backend             : Node.js (Express) / PHP (Laravel / CodeIgniter) / Python (FastAPI).
+- Printer Label       : Thermal Label Printer (Ukuran stiker 3x3 cm atau 4x2 cm).
+- Bahan Stiker Label  : Semi-Coated / Vinyl / Yupo (Tahan gesekan, awet, tidak mudah sobek).
+- Protokol Web        : Mandatory HTTPS (Persyaratan wajib browser untuk akses kamera WebRTC).
+
+[6. FITUR UTAMA DALAM APLIKASI WEB]
+--------------------------------------------------------------------------------
+1. Modul Autentikasi (Login):
+   - Matching NIK/Username & Password secara Read-Only ke DB SIMRS Khanza (`petugas`).
+   - Menyimpan session unit/divisi aktif pengguna.
+
+2. Modul Pemindai (QR Scanner):
+   - Buka kamera otomatis di mobile/tablet dengan opsi switch kamera (Depan/Belakang).
+   - Support Auto-focus & mode Rapid Multi-Scan.
+   - Support input dari USB Barcode/QR Scanner pada PC Desktop.
+
+3. Modul Generator & Cetak QR Code (On-Demand):
+   - Render QR Code presisi tinggi berisi teks Murni No. RM (contoh: `00123456`).
+   - Layout siap cetak ke printer label via browser `@media print`.
+
+4. Modul Dashboard & Alerting (Divisi RM):
+   - Menampilkan daftar berkas RM yang sedang dipinjam beserta penanggung jawabnya.
+   - Peringatan Keterlambatan (*Overdue Alert*) jika berkas dipinjam > 24 jam.
+   - Pencarian Riwayat / Timeline lengkap posisi berkas berdasarkan No. RM / Nama Pasien.
+
+[7. ROADMAP TAHAPAN PEMBANGUNAN (DEVELOPMENT STEPS)]
+--------------------------------------------------------------------------------
+Fase 1: Setup Lingkungan & Database
+  1. Inisialisasi Database Tracking Lokal (Buat tabel `rm_current_status` & `rm_tracking_logs`).
+  2. Konfigurasi koneksi ganda (Read-Only ke DB Khanza & Read/Write ke DB Lokal).
+  3. Buat API/Halaman Login terintegrasi akun SIMRS.
+
+Fase 2: Modul Scanner & Cetak Label
+  1. Integrasi library `html5-qrcode` pada antarmuka web.
+  2. Pembangunan fitur Cetak Label QR On-Demand untuk No. RM.
+
+Fase 3: Pembuatan Logika Transaksi Utama (Core API)
+  1. API & UI Check-Out (Peminjaman awal oleh peminjam).
+  2. API & UI Transfer (Serah-terima antar-divisi oleh penerima baru).
+  3. API & UI Check-In (Pengembalian berkas oleh petugas RM).
+
+Fase 4: Dashboard, Log Audit & Alert System
+  1. Pembangunan UI Timeline perpindahan berkas.
+  2. Implementasi logic penandaan pengembalian langsung (*Direct Return Flag*).
+  3. Pembuatan sistem peringatan berkas terlambat dikembalikan.
+
+Fase 5: Pengujian & Peluncuran Intranet
+  1. Konfigurasi SSL/HTTPS pada server lokal.
+  2. UAT (User Acceptance Testing) bersama divisi RM, IGD, dan Rawat Inap.
+================================================================================
